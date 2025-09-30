@@ -435,15 +435,38 @@ async def scrape_news(scrape_request: NewsScrapeRequest, request: Request):
 
     for url in scrape_request.urls:
         try:
-            # Scrape article
+            logger.info(f"Starting scrape for: {url}")
+
+            # Scrape article with timeout
             article = scraper.scrape_article(url)
             if not article:
+                logger.warning(f"Failed to scrape: {url}")
                 failed_urls.append(url)
                 error_details[url] = "Could not extract article content. Website may be blocking automated access."
                 continue
 
-            # Summarize and categorize
-            ai_result = await summarizer.summarize_and_categorize(article)
+            # Check if AI summarization is enabled
+            use_ai = os.getenv("USE_AI_SUMMARIZATION", "false").lower() == "true"
+
+            if use_ai:
+                logger.info(f"Scraped article: {article.title[:50]}, starting AI summarization...")
+                # Summarize and categorize with 15 second timeout
+                try:
+                    ai_result = await summarizer.summarize_and_categorize(article, timeout=15)
+                except Exception as ai_error:
+                    logger.warning(f"AI summarization error, using fallback: {ai_error}")
+                    # Use fallback if AI fails completely
+                    ai_result = {
+                        "summary": summarizer._fallback_summary(article.content),
+                        "category": summarizer._guess_category(article.title, article.content)
+                    }
+            else:
+                logger.info(f"Scraped article: {article.title[:50]}, using fast fallback (AI disabled)")
+                # Use fallback directly (much faster)
+                ai_result = {
+                    "summary": summarizer._fallback_summary(article.content),
+                    "category": summarizer._guess_category(article.title, article.content)
+                }
 
             # Create article model
             article_model = NewsArticleModel(
@@ -459,12 +482,16 @@ async def scrape_news(scrape_request: NewsScrapeRequest, request: Request):
             # Save to database
             await db.news_articles.insert_one(article_model.model_dump())
             scraped_articles.append(article_model)
-            logger.info(f"Scraped and saved article: {article.title}")
+            logger.info(f"✅ Successfully saved article: {article.title[:50]}")
 
         except Exception as e:
-            logger.error(f"Error processing {url}: {e}")
+            logger.error(f"Error processing {url}: {e}", exc_info=True)
             failed_urls.append(url)
             error_details[url] = str(e)
+
+    message = f"Successfully scraped {len(scraped_articles)} article(s)."
+    if failed_urls:
+        message += f" {len(failed_urls)} URL(s) failed."
 
     return {
         "success": True,
@@ -473,7 +500,7 @@ async def scrape_news(scrape_request: NewsScrapeRequest, request: Request):
         "articles": scraped_articles,
         "failed_urls": failed_urls,
         "error_details": error_details,
-        "message": f"Successfully scraped {len(scraped_articles)} articles. {len(failed_urls)} failed." if failed_urls else f"Successfully scraped {len(scraped_articles)} articles."
+        "message": message
     }
 
 

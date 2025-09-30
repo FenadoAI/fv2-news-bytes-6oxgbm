@@ -1,5 +1,6 @@
 """News scraper and AI summarization module."""
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -217,13 +218,14 @@ class NewsAISummarizer:
         self.agent = ChatAgent(config)
 
     async def summarize_and_categorize(
-        self, article: NewsArticle
+        self, article: NewsArticle, timeout: int = 20
     ) -> Dict[str, str]:
         """
         Summarize article to exactly 60 words and categorize it.
 
         Args:
             article: NewsArticle object to summarize
+            timeout: Maximum time in seconds for AI call (default 20s)
 
         Returns:
             Dict with 'summary' and 'category' keys
@@ -240,13 +242,17 @@ SUMMARY: [your 60-word summary here]
 CATEGORY: [Technology/Business/Sports]"""
 
         try:
-            result = await self.agent.execute(prompt)
+            # Add timeout to AI call
+            result = await asyncio.wait_for(
+                self.agent.execute(prompt),
+                timeout=timeout
+            )
 
             if not result.success:
-                logger.error(f"AI summarization failed: {result.error}")
+                logger.warning(f"AI summarization failed: {result.error}, using fallback")
                 return {
                     "summary": self._fallback_summary(article.content),
-                    "category": "Business",
+                    "category": self._guess_category(article.title, article.content),
                 }
 
             # Parse response
@@ -256,19 +262,26 @@ CATEGORY: [Technology/Business/Sports]"""
 
             # Validate category
             if category not in self.CATEGORIES:
-                category = "Business"
+                category = self._guess_category(article.title, article.content)
 
             # Ensure summary is around 60 words
             if not summary:
                 summary = self._fallback_summary(article.content)
 
+            logger.info(f"AI summarization successful for: {article.title[:50]}")
             return {"summary": summary.strip(), "category": category.strip()}
 
-        except Exception as e:
-            logger.error(f"Error in AI summarization: {e}")
+        except asyncio.TimeoutError:
+            logger.warning(f"AI summarization timed out after {timeout}s, using fallback")
             return {
                 "summary": self._fallback_summary(article.content),
-                "category": "Business",
+                "category": self._guess_category(article.title, article.content),
+            }
+        except Exception as e:
+            logger.error(f"Error in AI summarization: {e}, using fallback")
+            return {
+                "summary": self._fallback_summary(article.content),
+                "category": self._guess_category(article.title, article.content),
             }
 
     def _extract_field(self, text: str, field_name: str) -> str:
@@ -283,3 +296,22 @@ CATEGORY: [Technology/Business/Sports]"""
         """Create a fallback summary by truncating content."""
         words = content.split()[:60]
         return " ".join(words) + ("..." if len(content.split()) > 60 else "")
+
+    def _guess_category(self, title: str, content: str) -> str:
+        """Guess category based on keywords in title and content."""
+        text = (title + " " + content[:500]).lower()
+
+        # Technology keywords
+        tech_keywords = ["tech", "ai", "software", "app", "computer", "digital", "startup", "google", "apple", "microsoft", "crypto", "bitcoin"]
+        # Sports keywords
+        sports_keywords = ["sport", "cricket", "football", "soccer", "tennis", "match", "player", "team", "championship", "tournament", "goal", "score"]
+
+        tech_score = sum(1 for keyword in tech_keywords if keyword in text)
+        sports_score = sum(1 for keyword in sports_keywords if keyword in text)
+
+        if tech_score > sports_score and tech_score > 0:
+            return "Technology"
+        elif sports_score > tech_score and sports_score > 0:
+            return "Sports"
+        else:
+            return "Business"  # Default category
