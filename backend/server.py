@@ -4,12 +4,16 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import jwt
 from dotenv import load_dotenv
-from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
@@ -25,6 +29,34 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 ROOT_DIR = Path(__file__).parent
+
+# Security
+security = HTTPBearer(auto_error=False)
+
+
+# Auth Models
+class GoogleLoginRequest(BaseModel):
+    token: str  # Can be ID token or Google user ID for testing
+    email: Optional[str] = None
+    name: Optional[str] = None
+    picture: Optional[str] = None
+
+
+class AuthResponse(BaseModel):
+    success: bool
+    access_token: Optional[str] = None
+    user: Optional[dict] = None
+    error: Optional[str] = None
+
+
+class UserModel(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    email: str
+    name: str
+    picture: Optional[str] = None
+    google_id: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_login: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class StatusCheck(BaseModel):
@@ -93,6 +125,43 @@ def _ensure_db(request: Request):
         raise HTTPException(status_code=503, detail="Database not ready") from exc
 
 
+def create_access_token(data: dict, expires_delta: timedelta = timedelta(days=30)) -> str:
+    """Create JWT access token."""
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + expires_delta
+    to_encode.update({"exp": expire})
+    jwt_secret = os.getenv("JWT_SECRET_KEY", "your-secret-key")
+    encoded_jwt = jwt.encode(to_encode, jwt_secret, algorithm="HS256")
+    return encoded_jwt
+
+
+def verify_token(credentials: HTTPAuthorizationCredentials) -> dict:
+    """Verify JWT token."""
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        jwt_secret = os.getenv("JWT_SECRET_KEY", "your-secret-key")
+        payload = jwt.decode(credentials.credentials, jwt_secret, algorithms=["HS256"])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+async def get_current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> dict:
+    """Get current authenticated user."""
+    payload = verify_token(credentials)
+    db = _ensure_db(request)
+    user = await db.users.find_one({"id": payload.get("user_id")})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
 def _get_agent_cache(request: Request) -> Dict[str, object]:
     if not hasattr(request.app.state, "agent_cache"):
         request.app.state.agent_cache = {}
@@ -155,6 +224,99 @@ api_router = APIRouter(prefix="/api")
 @api_router.get("/")
 async def root():
     return {"message": "Hello World"}
+
+
+# Auth Endpoints
+@api_router.post("/auth/google", response_model=AuthResponse)
+async def google_login(login_request: GoogleLoginRequest, request: Request):
+    """Authenticate user with Google OAuth token."""
+    try:
+        google_client_id = os.getenv("GOOGLE_CLIENT_ID")
+
+        # For development/testing: allow direct user info if provided
+        if login_request.email and login_request.name:
+            google_id = login_request.token
+            email = login_request.email
+            name = login_request.name
+            picture = login_request.picture
+            logger.info(f"Using direct auth for testing: {email}")
+        else:
+            # Production: Verify Google ID token
+            if not google_client_id or google_client_id == "your-google-client-id.apps.googleusercontent.com":
+                return AuthResponse(
+                    success=False,
+                    error="Google OAuth not configured. Please set GOOGLE_CLIENT_ID in .env"
+                )
+
+            try:
+                idinfo = id_token.verify_oauth2_token(
+                    login_request.token,
+                    google_requests.Request(),
+                    google_client_id
+                )
+                google_id = idinfo["sub"]
+                email = idinfo.get("email")
+                name = idinfo.get("name", email)
+                picture = idinfo.get("picture")
+            except ValueError as e:
+                logger.error(f"Invalid Google token: {e}")
+                return AuthResponse(success=False, error="Invalid Google token")
+
+        if not email:
+            return AuthResponse(success=False, error="Email not provided by Google")
+
+        # Get or create user in database
+        db = _ensure_db(request)
+        user = await db.users.find_one({"google_id": google_id})
+
+        if user:
+            # Update last login
+            await db.users.update_one(
+                {"google_id": google_id},
+                {"$set": {"last_login": datetime.now(timezone.utc)}}
+            )
+        else:
+            # Create new user
+            user_model = UserModel(
+                email=email,
+                name=name,
+                picture=picture,
+                google_id=google_id
+            )
+            await db.users.insert_one(user_model.model_dump())
+            user = user_model.model_dump()
+
+        # Create JWT token
+        access_token = create_access_token({"user_id": user["id"], "email": email})
+
+        return AuthResponse(
+            success=True,
+            access_token=access_token,
+            user={
+                "id": user["id"],
+                "email": email,
+                "name": name,
+                "picture": picture
+            }
+        )
+
+    except Exception as e:
+        logger.exception("Error in Google login")
+        return AuthResponse(success=False, error=str(e))
+
+
+@api_router.get("/auth/me")
+async def get_me(user: dict = Depends(get_current_user)):
+    """Get current authenticated user."""
+    return {
+        "success": True,
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "name": user["name"],
+            "picture": user.get("picture")
+        }
+    }
 
 
 @api_router.post("/status", response_model=StatusCheck)
