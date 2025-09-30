@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
 
 from ai_agents.agents import AgentConfig, ChatAgent, SearchAgent
+from news_scraper import NewsAISummarizer, NewsScraper
 
 
 logging.basicConfig(
@@ -65,6 +66,26 @@ class SearchResponse(BaseModel):
     error: Optional[str] = None
 
 
+class NewsArticleModel(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    title: str
+    summary: str
+    category: str
+    source_url: str
+    source_name: str
+    image_url: Optional[str] = None
+    published_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class NewsArticleCreate(BaseModel):
+    url: str
+
+
+class NewsScrapeRequest(BaseModel):
+    urls: List[str]
+
+
 def _ensure_db(request: Request):
     try:
         return request.app.state.db
@@ -113,6 +134,8 @@ async def lifespan(app: FastAPI):
         app.state.db = client[db_name]
         app.state.agent_config = AgentConfig()
         app.state.agent_cache = {}
+        app.state.news_scraper = NewsScraper()
+        app.state.news_summarizer = NewsAISummarizer(AgentConfig())
         logger.info("AI Agents API starting up")
         yield
     finally:
@@ -234,6 +257,109 @@ async def get_agent_capabilities(request: Request):
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Error getting capabilities")
         return {"success": False, "error": str(exc)}
+
+
+# News API endpoints
+@api_router.post("/news/scrape")
+async def scrape_news(scrape_request: NewsScrapeRequest, request: Request):
+    """Scrape news articles from provided URLs and save to database."""
+    db = _ensure_db(request)
+    scraper = request.app.state.news_scraper
+    summarizer = request.app.state.news_summarizer
+
+    scraped_articles = []
+    failed_urls = []
+
+    for url in scrape_request.urls:
+        try:
+            # Scrape article
+            article = scraper.scrape_article(url)
+            if not article:
+                failed_urls.append(url)
+                continue
+
+            # Summarize and categorize
+            ai_result = await summarizer.summarize_and_categorize(article)
+
+            # Create article model
+            article_model = NewsArticleModel(
+                title=article.title,
+                summary=ai_result["summary"],
+                category=ai_result["category"],
+                source_url=article.source_url,
+                source_name=article.source_name,
+                image_url=article.image_url,
+                published_at=article.published_at,
+            )
+
+            # Save to database
+            await db.news_articles.insert_one(article_model.model_dump())
+            scraped_articles.append(article_model)
+            logger.info(f"Scraped and saved article: {article.title}")
+
+        except Exception as e:
+            logger.error(f"Error processing {url}: {e}")
+            failed_urls.append(url)
+
+    return {
+        "success": True,
+        "scraped_count": len(scraped_articles),
+        "failed_count": len(failed_urls),
+        "articles": scraped_articles,
+        "failed_urls": failed_urls,
+    }
+
+
+@api_router.get("/news", response_model=List[NewsArticleModel])
+async def get_news(request: Request, category: Optional[str] = None, limit: int = 50):
+    """Get news articles with optional category filter."""
+    db = _ensure_db(request)
+
+    query = {}
+    if category:
+        query["category"] = category
+
+    articles = (
+        await db.news_articles.find(query)
+        .sort("published_at", -1)
+        .limit(limit)
+        .to_list(limit)
+    )
+
+    return [NewsArticleModel(**article) for article in articles]
+
+
+@api_router.get("/news/{article_id}", response_model=NewsArticleModel)
+async def get_news_article(article_id: str, request: Request):
+    """Get a single news article by ID."""
+    db = _ensure_db(request)
+
+    article = await db.news_articles.find_one({"id": article_id})
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    return NewsArticleModel(**article)
+
+
+@api_router.delete("/news/{article_id}")
+async def delete_news_article(article_id: str, request: Request):
+    """Delete a news article."""
+    db = _ensure_db(request)
+
+    result = await db.news_articles.delete_one({"id": article_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    return {"success": True, "message": "Article deleted"}
+
+
+@api_router.get("/news/categories/list")
+async def get_categories():
+    """Get list of available news categories."""
+    return {
+        "categories": ["Technology", "Business", "Sports"],
+        "default": "Business",
+    }
 
 
 app.include_router(api_router)
