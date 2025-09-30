@@ -1,6 +1,7 @@
 """News scraper and AI summarization module."""
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
@@ -39,57 +40,97 @@ class NewsScraper:
 
     def __init__(self):
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Cache-Control": "max-age=0",
         }
 
-    def scrape_article(self, url: str) -> Optional[NewsArticle]:
+    def scrape_article(self, url: str, max_retries: int = 3) -> Optional[NewsArticle]:
         """
-        Scrape a single article from a URL.
+        Scrape a single article from a URL with retry logic.
 
         Args:
             url: The URL of the article to scrape
+            max_retries: Maximum number of retry attempts
 
         Returns:
             NewsArticle object or None if scraping failed
         """
-        try:
-            response = requests.get(url, headers=self.headers, timeout=10)
-            response.raise_for_status()
+        for attempt in range(max_retries):
+            try:
+                # Add delay between retries
+                if attempt > 0:
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                    logger.info(f"Retry attempt {attempt + 1} for {url}")
 
-            soup = BeautifulSoup(response.content, "html.parser")
+                response = requests.get(url, headers=self.headers, timeout=15, allow_redirects=True)
 
-            # Extract title
-            title = self._extract_title(soup)
-            if not title:
-                logger.warning(f"Could not extract title from {url}")
-                return None
+                # Check for common blocking status codes
+                if response.status_code in [401, 403]:
+                    logger.warning(f"Access denied (status {response.status_code}) for {url}. This website may be blocking automated access.")
+                    if attempt == max_retries - 1:
+                        return None
+                    continue
 
-            # Extract content
-            content = self._extract_content(soup)
-            if not content:
-                logger.warning(f"Could not extract content from {url}")
-                return None
+                response.raise_for_status()
 
-            # Extract image
-            image_url = self._extract_image(soup, url)
+                soup = BeautifulSoup(response.content, "html.parser")
 
-            # Get source name from domain
-            source_name = self._get_source_name(url)
+                # Extract title
+                title = self._extract_title(soup)
+                if not title:
+                    logger.warning(f"Could not extract title from {url}")
+                    if attempt == max_retries - 1:
+                        return None
+                    continue
 
-            return NewsArticle(
-                title=title,
-                content=content,
-                source_url=url,
-                source_name=source_name,
-                image_url=image_url,
-            )
+                # Extract content
+                content = self._extract_content(soup)
+                if not content:
+                    logger.warning(f"Could not extract content from {url}")
+                    if attempt == max_retries - 1:
+                        return None
+                    continue
 
-        except requests.RequestException as e:
-            logger.error(f"Error scraping {url}: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected error scraping {url}: {e}")
-            return None
+                # Extract image
+                image_url = self._extract_image(soup, url)
+
+                # Get source name from domain
+                source_name = self._get_source_name(url)
+
+                logger.info(f"Successfully scraped: {title[:50]}...")
+                return NewsArticle(
+                    title=title,
+                    content=content,
+                    source_url=url,
+                    source_name=source_name,
+                    image_url=image_url,
+                )
+
+            except requests.HTTPError as e:
+                if e.response.status_code in [401, 403, 429]:
+                    logger.warning(f"HTTP {e.response.status_code} for {url}. Website may be blocking scraper.")
+                else:
+                    logger.error(f"HTTP error scraping {url}: {e}")
+                if attempt == max_retries - 1:
+                    return None
+            except requests.RequestException as e:
+                logger.error(f"Request error scraping {url}: {e}")
+                if attempt == max_retries - 1:
+                    return None
+            except Exception as e:
+                logger.error(f"Unexpected error scraping {url}: {e}")
+                if attempt == max_retries - 1:
+                    return None
+
+        return None
 
     def _extract_title(self, soup: BeautifulSoup) -> Optional[str]:
         """Extract article title from HTML."""

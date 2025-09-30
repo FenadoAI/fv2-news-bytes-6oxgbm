@@ -93,9 +93,9 @@ const Admin = () => {
   };
 
   const sampleUrls = [
-    "https://techcrunch.com/latest/",
-    "https://www.bbc.com/sport",
-    "https://www.businesstoday.in/latest",
+    "https://www.bbc.com/news/articles/c20gk72z33go",
+    "https://www.thehindu.com/business/",
+    "https://indianexpress.com/section/technology/",
   ].join("\n");
 
   return (
@@ -165,25 +165,51 @@ const Admin = () => {
                 {scrapeResult && (
                   <Alert
                     className={
-                      scrapeResult.success
+                      scrapeResult.success && scrapeResult.scraped_count > 0
                         ? "border-green-500 bg-green-50"
+                        : scrapeResult.failed_count > 0 && scrapeResult.scraped_count > 0
+                        ? "border-yellow-500 bg-yellow-50"
                         : "border-red-500 bg-red-50"
                     }
                   >
                     <AlertDescription>
                       {scrapeResult.success ? (
                         <div className="space-y-2">
-                          <div className="flex items-center gap-2 text-green-700">
-                            <CheckCircle className="w-4 h-4" />
+                          <div className="flex items-center gap-2">
+                            {scrapeResult.scraped_count > 0 ? (
+                              <CheckCircle className="w-4 h-4 text-green-700" />
+                            ) : (
+                              <XCircle className="w-4 h-4 text-red-700" />
+                            )}
                             <span className="font-semibold">
-                              Scraping completed!
+                              {scrapeResult.message || "Scraping completed!"}
                             </span>
                           </div>
-                          <div className="text-sm text-green-600">
+                          <div className="text-sm">
                             <p>
-                              Successfully scraped: {scrapeResult.scraped_count}
+                              ✅ Successfully scraped: {scrapeResult.scraped_count}
                             </p>
-                            <p>Failed: {scrapeResult.failed_count}</p>
+                            <p>❌ Failed: {scrapeResult.failed_count}</p>
+                            {scrapeResult.failed_urls && scrapeResult.failed_urls.length > 0 && (
+                              <div className="mt-2 text-xs">
+                                <p className="font-semibold">Failed URLs:</p>
+                                <ul className="list-disc list-inside">
+                                  {scrapeResult.failed_urls.map((url, idx) => (
+                                    <li key={idx} className="truncate">
+                                      {url}
+                                      {scrapeResult.error_details && scrapeResult.error_details[url] && (
+                                        <span className="text-red-600 ml-1">
+                                          ({scrapeResult.error_details[url]})
+                                        </span>
+                                      )}
+                                    </li>
+                                  ))}
+                                </ul>
+                                <p className="mt-2 text-yellow-600">
+                                  💡 Tip: Some websites block automated scraping. Try direct article URLs instead of homepage URLs.
+                                </p>
+                              </div>
+                            )}
                           </div>
                         </div>
                       ) : (

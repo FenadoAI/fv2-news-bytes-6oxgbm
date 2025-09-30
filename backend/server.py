@@ -269,6 +269,7 @@ async def scrape_news(scrape_request: NewsScrapeRequest, request: Request):
 
     scraped_articles = []
     failed_urls = []
+    error_details = {}
 
     for url in scrape_request.urls:
         try:
@@ -276,6 +277,7 @@ async def scrape_news(scrape_request: NewsScrapeRequest, request: Request):
             article = scraper.scrape_article(url)
             if not article:
                 failed_urls.append(url)
+                error_details[url] = "Could not extract article content. Website may be blocking automated access."
                 continue
 
             # Summarize and categorize
@@ -300,6 +302,7 @@ async def scrape_news(scrape_request: NewsScrapeRequest, request: Request):
         except Exception as e:
             logger.error(f"Error processing {url}: {e}")
             failed_urls.append(url)
+            error_details[url] = str(e)
 
     return {
         "success": True,
@@ -307,6 +310,8 @@ async def scrape_news(scrape_request: NewsScrapeRequest, request: Request):
         "failed_count": len(failed_urls),
         "articles": scraped_articles,
         "failed_urls": failed_urls,
+        "error_details": error_details,
+        "message": f"Successfully scraped {len(scraped_articles)} articles. {len(failed_urls)} failed." if failed_urls else f"Successfully scraped {len(scraped_articles)} articles."
     }
 
 
