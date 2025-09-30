@@ -1,7 +1,5 @@
 import "./App.css";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { GoogleOAuthProvider } from "@react-oauth/google";
-import { AuthProvider } from "./contexts/AuthContext";
 import Home from "./pages/Home";
 import Admin from "./pages/Admin";
 
@@ -15,22 +13,16 @@ const MY_HOMEPAGE_URL = API_BASE?.match(/-([a-z0-9]+)\./)?.[1]
 
 console.log(`MY_HOMEPAGE_URL: ${MY_HOMEPAGE_URL}`);
 
-const GOOGLE_CLIENT_ID = process.env.REACT_APP_GOOGLE_CLIENT_ID || "";
-
 function App() {
   return (
-    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-      <AuthProvider>
-        <div className="App">
-          <BrowserRouter>
-            <Routes>
-              <Route path="/" element={<Home />} />
-              <Route path="/admin" element={<Admin />} />
-            </Routes>
-          </BrowserRouter>
-        </div>
-      </AuthProvider>
-    </GoogleOAuthProvider>
+    <div className="App">
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/admin" element={<Admin />} />
+        </Routes>
+      </BrowserRouter>
+    </div>
   );
 }
 
