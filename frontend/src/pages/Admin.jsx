@@ -18,7 +18,19 @@ import {
   CheckCircle,
   XCircle,
   LogOut,
+  PlusCircle,
+  Upload,
+  Image as ImageIcon,
 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:8001";
 const API = `${API_BASE}/api`;
@@ -37,6 +49,21 @@ const Admin = () => {
   const [scrapeResult, setScrapeResult] = useState(null);
   const [scraping, setScraping] = useState(false);
   const [loginError, setLoginError] = useState(null);
+
+  // Manual article creation state
+  const [showManualForm, setShowManualForm] = useState(false);
+  const [manualArticle, setManualArticle] = useState({
+    title: "",
+    summary: "",
+    category: "Business",
+    source_url: "",
+    source_name: "",
+    image_url: "",
+  });
+  const [uploadedImage, setUploadedImage] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [creating, setCreating] = useState(false);
+  const [createResult, setCreateResult] = useState(null);
 
   const googleLogin = useGoogleLogin({
     onSuccess: async (tokenResponse) => {
@@ -131,6 +158,84 @@ const Admin = () => {
     } catch (error) {
       console.error("Error deleting article:", error);
       alert("Failed to delete article");
+    }
+  };
+
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith("image/")) {
+      alert("Please upload an image file");
+      return;
+    }
+
+    // Validate file size (max 2MB)
+    if (file.size > 2 * 1024 * 1024) {
+      alert("Image size should be less than 2MB");
+      return;
+    }
+
+    // Read file as base64
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setUploadedImage(reader.result);
+      setImagePreview(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleCreateArticle = async () => {
+    // Validation
+    if (!manualArticle.title || !manualArticle.summary || !manualArticle.source_name) {
+      alert("Please fill in all required fields");
+      return;
+    }
+
+    try {
+      setCreating(true);
+      setCreateResult(null);
+
+      const payload = {
+        ...manualArticle,
+        image_base64: uploadedImage, // Send base64 image if uploaded
+      };
+
+      const response = await axios.post(`${API}/news/create`, payload);
+
+      if (response.data) {
+        setCreateResult({
+          success: true,
+          message: "Article created successfully!",
+        });
+        // Reset form
+        setManualArticle({
+          title: "",
+          summary: "",
+          category: "Business",
+          source_url: "",
+          source_name: "",
+          image_url: "",
+        });
+        setUploadedImage(null);
+        setImagePreview(null);
+        // Refresh articles
+        fetchArticles();
+        // Hide form after 2 seconds
+        setTimeout(() => {
+          setShowManualForm(false);
+          setCreateResult(null);
+        }, 2000);
+      }
+    } catch (error) {
+      console.error("Error creating article:", error);
+      setCreateResult({
+        success: false,
+        message: error.response?.data?.detail || "Failed to create article",
+      });
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -251,6 +356,194 @@ const Admin = () => {
 
       <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Manual Article Creation */}
+          <div className="lg:col-span-1">
+            <Card className="mb-8">
+              <CardHeader>
+                <CardTitle className="flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <PlusCircle className="w-5 h-5" />
+                    Add Article Manually
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowManualForm(!showManualForm)}
+                  >
+                    {showManualForm ? "Hide" : "Show"}
+                  </Button>
+                </CardTitle>
+              </CardHeader>
+              {showManualForm && (
+                <CardContent className="space-y-4">
+                  <div>
+                    <Label htmlFor="title">Title *</Label>
+                    <Input
+                      id="title"
+                      placeholder="Article title"
+                      value={manualArticle.title}
+                      onChange={(e) =>
+                        setManualArticle({ ...manualArticle, title: e.target.value })
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="summary">Summary (60 words) *</Label>
+                    <Textarea
+                      id="summary"
+                      placeholder="Write a 60-word summary..."
+                      value={manualArticle.summary}
+                      onChange={(e) =>
+                        setManualArticle({ ...manualArticle, summary: e.target.value })
+                      }
+                      rows={4}
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      {manualArticle.summary.split(" ").filter(Boolean).length} words
+                    </p>
+                  </div>
+
+                  <div>
+                    <Label htmlFor="category">Category *</Label>
+                    <Select
+                      value={manualArticle.category}
+                      onValueChange={(value) =>
+                        setManualArticle({ ...manualArticle, category: value })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Technology">Technology</SelectItem>
+                        <SelectItem value="Business">Business</SelectItem>
+                        <SelectItem value="Sports">Sports</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div>
+                    <Label htmlFor="source_name">Source Name *</Label>
+                    <Input
+                      id="source_name"
+                      placeholder="e.g., TechCrunch, BBC"
+                      value={manualArticle.source_name}
+                      onChange={(e) =>
+                        setManualArticle({ ...manualArticle, source_name: e.target.value })
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="source_url">Source URL</Label>
+                    <Input
+                      id="source_url"
+                      placeholder="https://..."
+                      value={manualArticle.source_url}
+                      onChange={(e) =>
+                        setManualArticle({ ...manualArticle, source_url: e.target.value })
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <Label>Image</Label>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => document.getElementById("imageUpload").click()}
+                          className="w-full"
+                        >
+                          <Upload className="w-4 h-4 mr-2" />
+                          Upload Image
+                        </Button>
+                        <input
+                          id="imageUpload"
+                          type="file"
+                          accept="image/*"
+                          onChange={handleImageUpload}
+                          className="hidden"
+                        />
+                      </div>
+                      {imagePreview && (
+                        <div className="relative">
+                          <img
+                            src={imagePreview}
+                            alt="Preview"
+                            className="w-full h-32 object-cover rounded border"
+                          />
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            className="absolute top-1 right-1"
+                            onClick={() => {
+                              setUploadedImage(null);
+                              setImagePreview(null);
+                            }}
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                      )}
+                      <Input
+                        placeholder="Or paste image URL"
+                        value={manualArticle.image_url}
+                        onChange={(e) =>
+                          setManualArticle({ ...manualArticle, image_url: e.target.value })
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <Button
+                    onClick={handleCreateArticle}
+                    disabled={creating}
+                    className="w-full"
+                  >
+                    {creating ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      <>
+                        <PlusCircle className="w-4 h-4 mr-2" />
+                        Create Article
+                      </>
+                    )}
+                  </Button>
+
+                  {createResult && (
+                    <Alert
+                      className={
+                        createResult.success
+                          ? "border-green-500 bg-green-50"
+                          : "border-red-500 bg-red-50"
+                      }
+                    >
+                      <AlertDescription>
+                        {createResult.success ? (
+                          <div className="flex items-center gap-2 text-green-700">
+                            <CheckCircle className="w-4 h-4" />
+                            <span>{createResult.message}</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 text-red-700">
+                            <XCircle className="w-4 h-4" />
+                            <span>{createResult.message}</span>
+                          </div>
+                        )}
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                </CardContent>
+              )}
+            </Card>
+          </div>
+
           {/* Scrape Section */}
           <div className="lg:col-span-1">
             <Card>

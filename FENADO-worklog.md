@@ -183,3 +183,73 @@ USE_AI_SUMMARIZATION="true"   # AI mode (slower, better quality)
 - ✅ Testing successful
 - ✅ Performance optimized
 - ✅ Both AI and non-AI modes working
+
+## 2025-09-30 (Night Continued): Manual Article Creation with Image Upload
+
+### Requirement
+Add ability to manually create news articles in admin panel with image upload functionality.
+
+### Implementation
+
+1. **Backend API** (`backend/server.py`):
+   - Added `ManualNewsArticleCreate` model with image support
+   - Created `POST /api/news/create` endpoint
+   - Supports both image URL and base64 uploaded images
+   - Images stored as base64 in MongoDB
+
+2. **Frontend UI** (`frontend/src/pages/Admin.jsx`):
+   - Added collapsible "Add Article Manually" section
+   - Complete form with all required fields:
+     - Title (required)
+     - Summary with word counter (required)
+     - Category dropdown (Technology/Business/Sports)
+     - Source name (required)
+     - Source URL (optional)
+     - Image upload button with preview
+     - Image URL field as alternative
+   - Real-time image preview
+   - Validation and error handling
+   - Success feedback with auto-hide
+   - Auto-refresh article list after creation
+
+3. **Image Upload Features**:
+   - File type validation (images only)
+   - File size limit (2MB max)
+   - Base64 encoding for storage
+   - Live preview before submission
+   - Option to remove uploaded image
+   - Fallback to URL if no upload
+
+### Features
+✅ Manual article creation form
+✅ Image upload with preview
+✅ Base64 image storage in MongoDB
+✅ File validation (type & size)
+✅ Word counter for summary
+✅ Category selection dropdown
+✅ Real-time validation
+✅ Success/error feedback
+✅ Auto-refresh on success
+✅ Beautiful collapsible UI
+
+### UI Design
+- Collapsible card to save space
+- Show/Hide button for flexibility
+- Clean form layout with proper labels
+- Image preview with remove button
+- Word counter for summary field
+- Color-coded success/error alerts
+- Loading states during creation
+
+### Testing Results
+✅ API endpoint works perfectly
+✅ Image upload and preview functional
+✅ Articles saved to database correctly
+✅ Frontend form validation working
+✅ Auto-refresh after creation
+✅ Both uploaded and URL images work
+
+### Status
+- ✅ Feature complete
+- ✅ Tested and working
+- ✅ Ready to use

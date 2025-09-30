@@ -110,12 +110,18 @@ class NewsArticleModel(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-class NewsArticleCreate(BaseModel):
-    url: str
-
-
 class NewsScrapeRequest(BaseModel):
     urls: List[str]
+
+
+class ManualNewsArticleCreate(BaseModel):
+    title: str
+    summary: str
+    category: str
+    source_url: str
+    source_name: str
+    image_url: Optional[str] = None
+    image_base64: Optional[str] = None  # For uploaded images
 
 
 def _ensure_db(request: Request):
@@ -554,6 +560,34 @@ async def get_categories():
         "categories": ["Technology", "Business", "Sports"],
         "default": "Business",
     }
+
+
+@api_router.post("/news/create", response_model=NewsArticleModel)
+async def create_news_article(article_data: ManualNewsArticleCreate, request: Request):
+    """Create a news article manually with optional image upload."""
+    db = _ensure_db(request)
+
+    # Use image_base64 if provided, otherwise use image_url
+    final_image_url = article_data.image_url
+    if article_data.image_base64:
+        # Store base64 image directly
+        final_image_url = article_data.image_base64
+
+    # Create article model
+    article_model = NewsArticleModel(
+        title=article_data.title,
+        summary=article_data.summary,
+        category=article_data.category,
+        source_url=article_data.source_url,
+        source_name=article_data.source_name,
+        image_url=final_image_url,
+    )
+
+    # Save to database
+    await db.news_articles.insert_one(article_model.model_dump())
+    logger.info(f"Manually created article: {article_data.title}")
+
+    return article_model
 
 
 app.include_router(api_router)
